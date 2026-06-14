@@ -1,5 +1,5 @@
 --[[
-    ONE PEACE HUB  -  Fluent Edition
+    ONE PIECE: FINAL  -  Fluent Edition
     by @Mana_scripts
     Target: Solara / Xeno / Wave
 ]]
@@ -580,7 +580,7 @@ local function runKeyScreen()
         Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, Active = true })
     mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 10),
         Size = UDim2.new(1, -40, 0, 22), BackgroundTransparency = 1,
-        Font = Enum.Font.GothamBold, Text = "One Peace Hub", TextColor3 = C.Text,
+        Font = Enum.Font.GothamBold, Text = "One Piece: Final", TextColor3 = C.Text,
         TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left })
     mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 30),
         Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
@@ -715,7 +715,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
 local Window = Fluent:CreateWindow({
-    Title = "One Peace Hub",
+    Title = "One Piece: Final",
     SubTitle = "by @Mana_scripts",
     TabWidth = 150,
     Size = UDim2.fromOffset(580, 460),
@@ -938,7 +938,7 @@ Tabs.Player:AddButton({ Title="Server Hop",
 
 --==[ FINALIZE ]==-------------------------------------------------------------
 Window:SelectTab(1)
-Fluent:Notify({ Title="One Peace Hub", Content="Loaded! by @Mana_scripts", Duration=6 })
+Fluent:Notify({ Title="One Piece: Final", Content="Loaded! by @Mana_scripts", Duration=6 })
 
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
