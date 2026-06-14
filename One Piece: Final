@@ -18,6 +18,196 @@ local Camera      = Workspace.CurrentCamera
 local firetouchinterest = rawget(getfenv(), "firetouchinterest") or function() end
 local firesignal = rawget(getfenv(), "firesignal") or function() end
 
+--==[ CUSTOM KEY SCREEN ]==----------------------------------------------------
+local KEY_CORRECT = "R/SCRIPTS2026"
+local KEY_LINK    = "https://direct-link.net/3535552/Beq3v5uY3e6O"
+
+local keyParent = (gethui and gethui()) or game:GetService("CoreGui")
+
+local function runKeyScreen()
+    -- Always shows the key screen on every execution.
+    -- returns true once a valid key is entered (blocks until resolved)
+    local done = false
+    local success = false
+
+    local kg = Instance.new("ScreenGui")
+    kg.Name = "OnePieceFinalKey"
+    kg.ResetOnSpawn = false
+    kg.IgnoreGuiInset = true
+    kg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    kg.DisplayOrder = 99999
+    kg.Parent = keyParent
+
+    -- theme (matches Fluent "Darker")
+    local C = {
+        Bg     = Color3.fromRGB(18, 19, 24),
+        Bg2    = Color3.fromRGB(24, 26, 32),
+        Field  = Color3.fromRGB(28, 30, 37),
+        Stroke = Color3.fromRGB(44, 47, 56),
+        Text   = Color3.fromRGB(235, 238, 244),
+        Sub    = Color3.fromRGB(130, 138, 150),
+        Accent = Color3.fromRGB(255, 138, 76),
+        Good   = Color3.fromRGB(126, 211, 145),
+        Bad    = Color3.fromRGB(232, 110, 110),
+    }
+    local function mk(cls, props, kids)
+        local o = Instance.new(cls)
+        for k, v in pairs(props or {}) do if k ~= "Parent" then o[k] = v end end
+        for _, c in ipairs(kids or {}) do c.Parent = o end
+        if props and props.Parent then o.Parent = props.Parent end
+        return o
+    end
+    local function rc(p, r) mk("UICorner", { Parent = p, CornerRadius = UDim.new(0, r or 8) }) end
+    local function st(p, c, t) mk("UIStroke", { Parent = p, Color = c or C.Stroke, Thickness = t or 1 }) end
+
+    -- main card (compact)
+    local card = mk("Frame", {
+        Parent = kg, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(320, 250),
+        BackgroundColor3 = C.Bg, BorderSizePixel = 0, Active = true,
+    })
+    rc(card, 12); st(card, C.Stroke, 1)
+
+    -- accent top strip
+    mk("Frame", { Parent = card, Size = UDim2.new(1, 0, 0, 3),
+        BackgroundColor3 = C.Accent, BorderSizePixel = 0 },
+        { (function() local g=Instance.new("UICorner"); g.CornerRadius=UDim.new(0,12); return g end)() })
+
+    -- header (draggable area)
+    local header = mk("Frame", { Parent = card, Position = UDim2.fromOffset(0, 3),
+        Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, Active = true })
+    mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 10),
+        Size = UDim2.new(1, -40, 0, 22), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold, Text = "One Piece: Final", TextColor3 = C.Text,
+        TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left })
+    mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 30),
+        Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham, Text = "Key System  -  by @Mana_scripts", TextColor3 = C.Sub,
+        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left })
+
+    -- close
+    local closeB = mk("TextButton", { Parent = header, AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, -14, 0, 12), Size = UDim2.fromOffset(24, 24),
+        BackgroundColor3 = C.Bg2, Font = Enum.Font.GothamBold, Text = "X",
+        TextColor3 = C.Sub, TextSize = 12, AutoButtonColor = false })
+    rc(closeB, 6)
+
+    -- key input field
+    local field = mk("TextBox", { Parent = card, Position = UDim2.fromOffset(20, 70),
+        Size = UDim2.new(1, -40, 0, 40), BackgroundColor3 = C.Field, BorderSizePixel = 0,
+        Font = Enum.Font.Gotham, PlaceholderText = "Enter key...", Text = "",
+        TextColor3 = C.Text, PlaceholderColor3 = C.Sub, TextSize = 13,
+        ClearTextOnFocus = false })
+    rc(field, 8); st(field, C.Stroke, 1)
+    mk("UIPadding", { Parent = field, PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) })
+
+    -- status line
+    local status = mk("TextLabel", { Parent = card, Position = UDim2.fromOffset(20, 116),
+        Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham, Text = "Paste your key and press Submit", TextColor3 = C.Sub,
+        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left })
+
+    -- submit button
+    local submitB = mk("TextButton", { Parent = card, Position = UDim2.fromOffset(20, 142),
+        Size = UDim2.new(1, -40, 0, 40), BackgroundColor3 = C.Accent, BorderSizePixel = 0,
+        Font = Enum.Font.GothamBold, Text = "Submit", TextColor3 = Color3.fromRGB(20, 14, 10),
+        TextSize = 14, AutoButtonColor = false })
+    rc(submitB, 8)
+
+    -- get key button
+    local getB = mk("TextButton", { Parent = card, Position = UDim2.fromOffset(20, 190),
+        Size = UDim2.new(1, -40, 0, 36), BackgroundColor3 = C.Bg2, BorderSizePixel = 0,
+        Font = Enum.Font.GothamMedium, Text = "Get Key", TextColor3 = C.Text,
+        TextSize = 13, AutoButtonColor = false })
+    rc(getB, 8); st(getB, C.Stroke, 1)
+
+    -- hover effects
+    local function hov(btn, base, hi)
+        btn.MouseEnter:Connect(function() btn.BackgroundColor3 = hi end)
+        btn.MouseLeave:Connect(function() btn.BackgroundColor3 = base end)
+    end
+    hov(getB, C.Bg2, C.Field)
+    closeB.MouseEnter:Connect(function() closeB.BackgroundColor3 = C.Bad; closeB.TextColor3 = C.Text end)
+    closeB.MouseLeave:Connect(function() closeB.BackgroundColor3 = C.Bg2; closeB.TextColor3 = C.Sub end)
+
+    -- drag (whole card via header)
+    do
+        local UIS = game:GetService("UserInputService")
+        local dragging, ds, sp
+        local function begin(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                dragging = true; ds = i.Position; sp = card.Position
+            end
+        end
+        header.InputBegan:Connect(begin)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+                local d = i.Position - ds
+                card.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+    end
+
+    -- get key: copy link + open in browser if supported
+    getB.MouseButton1Click:Connect(function()
+        if setclipboard then pcall(setclipboard, KEY_LINK) end
+        local opened = false
+        -- try common executor "open url" functions
+        local openfns = { rawget(getfenv(), "request"), rawget(getfenv(), "http_request") }
+        pcall(function()
+            if syn and syn.request then
+                -- can't open browser, just rely on clipboard
+            end
+        end)
+        status.Text = "Link copied to clipboard! Paste in browser."
+        status.TextColor3 = C.Good
+    end)
+
+    -- submit
+    local function trySubmit()
+        local entered = field.Text:gsub("%s+", "")
+        if entered == KEY_CORRECT then
+            status.Text = "Key valid! Loading..."
+            status.TextColor3 = C.Good
+            success = true
+            task.wait(0.4)
+            kg:Destroy()
+            done = true
+        else
+            status.Text = "Invalid key. Try again."
+            status.TextColor3 = C.Bad
+            field.Text = ""
+            -- shake
+            local ox = card.Position
+            for i = 1, 3 do
+                card.Position = ox + UDim2.fromOffset(6, 0); task.wait(0.04)
+                card.Position = ox - UDim2.fromOffset(6, 0); task.wait(0.04)
+            end
+            card.Position = ox
+        end
+    end
+    submitB.MouseButton1Click:Connect(trySubmit)
+    field.FocusLost:Connect(function(enter) if enter then trySubmit() end end)
+
+    closeB.MouseButton1Click:Connect(function()
+        kg:Destroy(); done = true; success = false
+    end)
+
+    -- block until resolved
+    while not done do task.wait(0.05) end
+    return success
+end
+
+if not runKeyScreen() then
+    return  -- wrong key or closed; do not load the hub
+end
+
+
 --==[ CHAR HELPERS ]==---------------------------------------------------------
 local function getChar() return LocalPlayer.Character end
 local function getHum() local c=getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
@@ -520,194 +710,6 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
---==[ CUSTOM KEY SCREEN ]==----------------------------------------------------
-local KEY_CORRECT = "R/SCRIPTS2026"
-local KEY_LINK    = "https://direct-link.net/3535552/Beq3v5uY3e6O"
-
-local keyParent = (gethui and gethui()) or game:GetService("CoreGui")
-
-local function runKeyScreen()
-    -- Always shows the key screen on every execution.
-    -- returns true once a valid key is entered (blocks until resolved)
-    local done = false
-    local success = false
-
-    local kg = Instance.new("ScreenGui")
-    kg.Name = "OnePeaceKey"
-    kg.ResetOnSpawn = false
-    kg.IgnoreGuiInset = true
-    kg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    kg.DisplayOrder = 99999
-    kg.Parent = keyParent
-
-    -- theme (matches Fluent "Darker")
-    local C = {
-        Bg     = Color3.fromRGB(18, 19, 24),
-        Bg2    = Color3.fromRGB(24, 26, 32),
-        Field  = Color3.fromRGB(28, 30, 37),
-        Stroke = Color3.fromRGB(44, 47, 56),
-        Text   = Color3.fromRGB(235, 238, 244),
-        Sub    = Color3.fromRGB(130, 138, 150),
-        Accent = Color3.fromRGB(255, 138, 76),
-        Good   = Color3.fromRGB(126, 211, 145),
-        Bad    = Color3.fromRGB(232, 110, 110),
-    }
-    local function mk(cls, props, kids)
-        local o = Instance.new(cls)
-        for k, v in pairs(props or {}) do if k ~= "Parent" then o[k] = v end end
-        for _, c in ipairs(kids or {}) do c.Parent = o end
-        if props and props.Parent then o.Parent = props.Parent end
-        return o
-    end
-    local function rc(p, r) mk("UICorner", { Parent = p, CornerRadius = UDim.new(0, r or 8) }) end
-    local function st(p, c, t) mk("UIStroke", { Parent = p, Color = c or C.Stroke, Thickness = t or 1 }) end
-
-    -- main card (compact)
-    local card = mk("Frame", {
-        Parent = kg, AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(320, 250),
-        BackgroundColor3 = C.Bg, BorderSizePixel = 0, Active = true,
-    })
-    rc(card, 12); st(card, C.Stroke, 1)
-
-    -- accent top strip
-    mk("Frame", { Parent = card, Size = UDim2.new(1, 0, 0, 3),
-        BackgroundColor3 = C.Accent, BorderSizePixel = 0 },
-        { (function() local g=Instance.new("UICorner"); g.CornerRadius=UDim.new(0,12); return g end)() })
-
-    -- header (draggable area)
-    local header = mk("Frame", { Parent = card, Position = UDim2.fromOffset(0, 3),
-        Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, Active = true })
-    mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 10),
-        Size = UDim2.new(1, -40, 0, 22), BackgroundTransparency = 1,
-        Font = Enum.Font.GothamBold, Text = "One Piece: Final", TextColor3 = C.Text,
-        TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left })
-    mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 30),
-        Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
-        Font = Enum.Font.Gotham, Text = "Key System  -  by @Mana_scripts", TextColor3 = C.Sub,
-        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left })
-
-    -- close
-    local closeB = mk("TextButton", { Parent = header, AnchorPoint = Vector2.new(1, 0),
-        Position = UDim2.new(1, -14, 0, 12), Size = UDim2.fromOffset(24, 24),
-        BackgroundColor3 = C.Bg2, Font = Enum.Font.GothamBold, Text = "X",
-        TextColor3 = C.Sub, TextSize = 12, AutoButtonColor = false })
-    rc(closeB, 6)
-
-    -- key input field
-    local field = mk("TextBox", { Parent = card, Position = UDim2.fromOffset(20, 70),
-        Size = UDim2.new(1, -40, 0, 40), BackgroundColor3 = C.Field, BorderSizePixel = 0,
-        Font = Enum.Font.Gotham, PlaceholderText = "Enter key...", Text = "",
-        TextColor3 = C.Text, PlaceholderColor3 = C.Sub, TextSize = 13,
-        ClearTextOnFocus = false })
-    rc(field, 8); st(field, C.Stroke, 1)
-    mk("UIPadding", { Parent = field, PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) })
-
-    -- status line
-    local status = mk("TextLabel", { Parent = card, Position = UDim2.fromOffset(20, 116),
-        Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
-        Font = Enum.Font.Gotham, Text = "Paste your key and press Submit", TextColor3 = C.Sub,
-        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left })
-
-    -- submit button
-    local submitB = mk("TextButton", { Parent = card, Position = UDim2.fromOffset(20, 142),
-        Size = UDim2.new(1, -40, 0, 40), BackgroundColor3 = C.Accent, BorderSizePixel = 0,
-        Font = Enum.Font.GothamBold, Text = "Submit", TextColor3 = Color3.fromRGB(20, 14, 10),
-        TextSize = 14, AutoButtonColor = false })
-    rc(submitB, 8)
-
-    -- get key button
-    local getB = mk("TextButton", { Parent = card, Position = UDim2.fromOffset(20, 190),
-        Size = UDim2.new(1, -40, 0, 36), BackgroundColor3 = C.Bg2, BorderSizePixel = 0,
-        Font = Enum.Font.GothamMedium, Text = "Get Key", TextColor3 = C.Text,
-        TextSize = 13, AutoButtonColor = false })
-    rc(getB, 8); st(getB, C.Stroke, 1)
-
-    -- hover effects
-    local function hov(btn, base, hi)
-        btn.MouseEnter:Connect(function() btn.BackgroundColor3 = hi end)
-        btn.MouseLeave:Connect(function() btn.BackgroundColor3 = base end)
-    end
-    hov(getB, C.Bg2, C.Field)
-    closeB.MouseEnter:Connect(function() closeB.BackgroundColor3 = C.Bad; closeB.TextColor3 = C.Text end)
-    closeB.MouseLeave:Connect(function() closeB.BackgroundColor3 = C.Bg2; closeB.TextColor3 = C.Sub end)
-
-    -- drag (whole card via header)
-    do
-        local UIS = game:GetService("UserInputService")
-        local dragging, ds, sp
-        local function begin(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-                dragging = true; ds = i.Position; sp = card.Position
-            end
-        end
-        header.InputBegan:Connect(begin)
-        UIS.InputChanged:Connect(function(i)
-            if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-                local d = i.Position - ds
-                card.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
-            end
-        end)
-        UIS.InputEnded:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-                dragging = false
-            end
-        end)
-    end
-
-    -- get key: copy link + open in browser if supported
-    getB.MouseButton1Click:Connect(function()
-        if setclipboard then pcall(setclipboard, KEY_LINK) end
-        local opened = false
-        -- try common executor "open url" functions
-        local openfns = { rawget(getfenv(), "request"), rawget(getfenv(), "http_request") }
-        pcall(function()
-            if syn and syn.request then
-                -- can't open browser, just rely on clipboard
-            end
-        end)
-        status.Text = "Link copied to clipboard! Paste in browser."
-        status.TextColor3 = C.Good
-    end)
-
-    -- submit
-    local function trySubmit()
-        local entered = field.Text:gsub("%s+", "")
-        if entered == KEY_CORRECT then
-            status.Text = "Key valid! Loading..."
-            status.TextColor3 = C.Good
-            success = true
-            task.wait(0.4)
-            kg:Destroy()
-            done = true
-        else
-            status.Text = "Invalid key. Try again."
-            status.TextColor3 = C.Bad
-            field.Text = ""
-            -- shake
-            local ox = card.Position
-            for i = 1, 3 do
-                card.Position = ox + UDim2.fromOffset(6, 0); task.wait(0.04)
-                card.Position = ox - UDim2.fromOffset(6, 0); task.wait(0.04)
-            end
-            card.Position = ox
-        end
-    end
-    submitB.MouseButton1Click:Connect(trySubmit)
-    field.FocusLost:Connect(function(enter) if enter then trySubmit() end end)
-
-    closeB.MouseButton1Click:Connect(function()
-        kg:Destroy(); done = true; success = false
-    end)
-
-    -- block until resolved
-    while not done do task.wait(0.05) end
-    return success
-end
-
-if not runKeyScreen() then
-    return  -- wrong key or closed; do not load the hub
-end
 
 --==[ FLUENT UI ]==------------------------------------------------------------
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -943,8 +945,8 @@ Fluent:Notify({ Title="One Piece: Final", Content="Loaded! by @Mana_scripts", Du
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
-SaveManager:SetFolder("OnePeaceHub")
-InterfaceManager:SetFolder("OnePeaceHub")
+SaveManager:SetFolder("OnePieceFinal")
+InterfaceManager:SetFolder("OnePieceFinal")
 InterfaceManager:BuildInterfaceSection(Tabs.Player)
 SaveManager:BuildConfigSection(Tabs.Player)
 SaveManager:LoadAutoloadConfig()
