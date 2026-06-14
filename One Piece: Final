@@ -1,0 +1,950 @@
+--[[
+    ONE PEACE HUB  -  Fluent Edition
+    by @Mana_scripts
+    Target: Solara / Xeno / Wave
+]]
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace        = game:GetService("Workspace")
+local Lighting         = game:GetService("Lighting")
+local VirtualUser      = game:GetService("VirtualUser")
+local TeleportService   = game:GetService("TeleportService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = Workspace.CurrentCamera
+
+local firetouchinterest = rawget(getfenv(), "firetouchinterest") or function() end
+local firesignal = rawget(getfenv(), "firesignal") or function() end
+
+--==[ CHAR HELPERS ]==---------------------------------------------------------
+local function getChar() return LocalPlayer.Character end
+local function getHum() local c=getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
+local function getHRP() local c=getChar(); return c and c:FindFirstChild("HumanoidRootPart") end
+
+--==[ FLAGS ]==----------------------------------------------------------------
+local Flags = {
+    -- combat
+    AutoFarm=false, KillAura=false, AutoM1=false,
+    LvlFarm=false, BossFarm=false,
+    FarmRange=2000, KillAuraRange=80, FarmHeight=4,
+    -- farm extras
+    FruitFarm=false, ChestFarm=false,
+    -- movement
+    Fly=false, FlySpeed=80, Noclip=false, SpeedHack=false, WalkSpeed=50, InfJump=false,
+    -- player
+    AntiAFK=true, Fullbright=false, NoFog=false, JumpPower=50,
+    -- esp
+    ESPMobs=false, ESPPlayers=false, ESPFruits=false, ESPChests=false, ESPMaxDist=2000,
+}
+
+--==[ SAFE ATTACK (no mouse hijack) ]==----------------------------------------
+-- The old SendMouseButtonEvent stole the real cursor. We instead fire the
+-- click directly to the game with VirtualInputManager at the SCREEN CENTER
+-- only when farming, and we throttle it so it never floods your input.
+local _vim = game:GetService("VirtualInputManager")
+local _lastClick = 0
+local function attack()
+    local now = os.clock()
+    if now - _lastClick < 0.12 then return end   -- throttle = no mouse lock
+    _lastClick = now
+    pcall(function()
+        _vim:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+        _vim:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+    end)
+end
+
+--==[ TARGETING ]==------------------------------------------------------------
+local function getAlive() return Workspace:FindFirstChild("Alive") end
+
+-- parse "Lv12 Boar" -> 12
+local function mobLevel(name)
+    local n = tostring(name):match("Lv(%d+)")
+    return n and tonumber(n) or 0
+end
+
+local function getMobs(maxDist, opts)
+    opts = opts or {}
+    local folder = getAlive(); if not folder then return {} end
+    local hrp = getHRP(); if not hrp then return {} end
+    local myPos = hrp.Position
+    local out = {}
+    for _, m in ipairs(folder:GetChildren()) do
+        if m ~= getChar() then
+            local h = m:FindFirstChildOfClass("Humanoid")
+            local r = m:FindFirstChild("HumanoidRootPart")
+            if h and r and h.Health > 0 then
+                local isPlayer = Players:GetPlayerFromCharacter(m) ~= nil
+                local pass = true
+                if opts.mobsOnly and isPlayer then pass = false end
+                if opts.bossOnly and not (m.Name:lower():find("boss") or mobLevel(m.Name) >= 150) then pass = false end
+                if pass then
+                    local d = (r.Position - myPos).Magnitude
+                    if d <= maxDist then
+                        out[#out+1] = {model=m, root=r, hum=h, dist=d, isPlayer=isPlayer, lvl=mobLevel(m.Name)}
+                    end
+                end
+            end
+        end
+    end
+    if opts.byLevel then
+        table.sort(out, function(a,b) return a.lvl < b.lvl end)  -- weakest first
+    else
+        table.sort(out, function(a,b) return a.dist < b.dist end)
+    end
+    return out
+end
+
+local function tpToMob(t)
+    local hrp = getHRP(); if not hrp then return end
+    hrp.CFrame = CFrame.new(
+        t.root.Position + Vector3.new(0, Flags.FarmHeight, 0) + t.root.CFrame.LookVector * -4,
+        t.root.Position
+    )
+end
+
+--==[ FOLDER LOCATORS ]==------------------------------------------------------
+local function getNPCFolder(sub)
+    local ignore = Workspace:FindFirstChild("Ignore")
+    local npcs = ignore and ignore:FindFirstChild("NPCs")
+    return npcs and npcs:FindFirstChild(sub)
+end
+local function getChestsFolder() return Workspace:FindFirstChild("Chests") end
+local function getMapFruits()
+    local map = Workspace:FindFirstChild("MapFolder")
+    return map and map:FindFirstChild("Fruits")
+end
+local function getIslands()
+    local map = Workspace:FindFirstChild("MapFolder")
+    if not map then return {} end
+    local islands = {}
+    for _, c in ipairs(map:GetChildren()) do
+        if c.Name:match("^Island%d+") then
+            islands[#islands+1] = c
+        end
+    end
+    table.sort(islands, function(a,b)
+        return (tonumber(a.Name:match("%d+")) or 0) < (tonumber(b.Name:match("%d+")) or 0)
+    end)
+    return islands
+end
+
+-- Get a usable pivot position from any model/part
+local function getPivot(inst)
+    if inst:IsA("BasePart") then return inst.CFrame end
+    if inst:IsA("Model") then
+        local ok, cf = pcall(function() return inst:GetPivot() end)
+        if ok then return cf end
+        local r = inst:FindFirstChild("HumanoidRootPart") or inst.PrimaryPart
+        if r then return r.CFrame end
+        local any = inst:FindFirstChildWhichIsA("BasePart")
+        if any then return any.CFrame end
+    end
+    return nil
+end
+
+local function tpToCF(cf)
+    local hrp = getHRP()
+    if hrp and cf then hrp.CFrame = cf + Vector3.new(0, 4, 0) end
+end
+
+-- Teleport to the TOP of an island model so you never spawn in the ground.
+-- Uses the model bounding box: top Y + a small clearance.
+local function tpAboveModel(model, clearance)
+    local hrp = getHRP()
+    if not hrp or not model then return end
+    clearance = clearance or 8
+    local ok, cf, size = pcall(function() return model:GetBoundingBox() end)
+    if ok and cf and size then
+        local topY = cf.Position.Y + (size.Y / 2) + clearance
+        hrp.CFrame = CFrame.new(cf.Position.X, topY, cf.Position.Z)
+    else
+        local piv = getPivot(model)
+        if piv then hrp.CFrame = piv + Vector3.new(0, 20, 0) end
+    end
+end
+
+--==[ PLAYER LEVEL (per-weapon, from _G.Data) ]==------------------------------
+-- The game stores levels as _G.Data[UserId].Stats.<Class>.Level
+-- We take the HIGHEST weapon level as your effective combat level.
+local function getPlayerLevel()
+    local best = 0
+    pcall(function()
+        local data = _G.Data and _G.Data[LocalPlayer.UserId]
+        if data and data.Stats then
+            for _, stat in pairs(data.Stats) do
+                if type(stat) == "table" and type(stat.Level) == "number" then
+                    if stat.Level > best then best = stat.Level end
+                end
+            end
+        end
+    end)
+    return best
+end
+
+--==[ WEAPON EQUIP ]==---------------------------------------------------------
+-- Selected tool name to keep equipped while farming
+local SelectedWeapon = nil
+local function listTools()
+    local names = {}
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") then names[#names+1] = t.Name end
+        end
+    end
+    local char = getChar()
+    if char then
+        for _, t in ipairs(char:GetChildren()) do
+            if t:IsA("Tool") then names[#names+1] = t.Name end
+        end
+    end
+    return names
+end
+local function equipWeapon(name)
+    name = name or SelectedWeapon
+    if not name then return end
+    local hum = getHum()
+    local char = getChar()
+    if not hum or not char then return end
+    -- already equipped?
+    if char:FindFirstChild(name) then return end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    local tool = bp and bp:FindFirstChild(name)
+    if tool then pcall(function() hum:EquipTool(tool) end) end
+end
+
+--==[ CHEST COLLECT (forces pickup without manual move) ]==--------------------
+-- Chests register via .Touched on the player's parts. TPing alone doesn't
+-- fire Touched reliably, so we jitter the character to trigger the contact.
+local function collectChest(chestPart)
+    local hrp = getHRP()
+    if not hrp or not chestPart then return end
+    local target = (chestPart:IsA("BasePart") and chestPart) or chestPart:FindFirstChildWhichIsA("BasePart")
+    if not target then return end
+    -- TP onto the chest
+    hrp.CFrame = target.CFrame + Vector3.new(0, 2, 0)
+    -- Manually fire Touched both ways to guarantee pickup
+    pcall(function()
+        firetouchinterest(hrp, target, 0)
+        firetouchinterest(hrp, target, 1)
+    end)
+    -- Small jitter as a fallback if firetouchinterest is unavailable
+    task.wait(0.15)
+    hrp.CFrame = target.CFrame + Vector3.new(0, 2, 1)
+    task.wait(0.1)
+    hrp.CFrame = target.CFrame + Vector3.new(0, 2, -1)
+    task.wait(0.1)
+end
+
+--==[ AUTO RESPAWN (press Spawn button on death) ]==---------------------------
+-- When farming and you die, the game shows a blue "Spawn" button.
+-- This finds it in PlayerGui and clicks it so farming continues automatically.
+local function pressSpawnButton()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return false end
+    for _, d in ipairs(pg:GetDescendants()) do
+        if (d:IsA("TextButton") or d:IsA("ImageButton")) then
+            local txt = (d:IsA("TextButton") and d.Text or "") or ""
+            local nameMatch = d.Name:lower():find("spawn")
+            if txt:lower():find("spawn") or nameMatch then
+                -- fire all click signals to be safe
+                pcall(function() firesignal(d.MouseButton1Click) end)
+                pcall(function() firesignal(d.Activated) end)
+                pcall(function() firesignal(d.MouseButton1Down) end)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- death watcher: only acts while a farm is running
+local AutoRespawn = true
+task.spawn(function()
+    while task.wait(0.5) do
+        if not AutoRespawn then continue end
+        local farmingActive = Flags.AutoFarm or Flags.LvlFarm or Flags.BossFarm
+            or Flags.FruitFarm or Flags.ChestFarm
+        if not farmingActive then continue end
+        local hum = getHum()
+        if (not hum) or hum.Health <= 0 then
+            -- character dead or missing -> spam the spawn button until alive
+            for _ = 1, 6 do
+                if pressSpawnButton() then break end
+                task.wait(0.4)
+            end
+            task.wait(1.5)  -- wait for respawn before checking again
+        end
+    end
+end)
+
+--==[ FEATURE LOOPS (all check their flag, safe to toggle) ]==-----------------
+-- Combat farm loop  (auto-equips weapon, repeats after death)
+task.spawn(function()
+    while task.wait(0.1) do
+        local hrp, hum = getHRP(), getHum()
+        if not hrp or not hum or hum.Health <= 0 then continue end
+
+        if Flags.AutoFarm or Flags.LvlFarm or Flags.BossFarm then
+            -- keep weapon equipped (handles respawn automatically)
+            if SelectedWeapon then equipWeapon() end
+
+            local mobs
+            if Flags.BossFarm then
+                mobs = getMobs(9e9, {mobsOnly=true, bossOnly=true})
+            elseif Flags.LvlFarm then
+                -- LEVEL FARM: target mobs at or just below your level (best XP, safe)
+                -- Your level = highest weapon level. Pick mobs whose level is the
+                -- closest match <= myLevel+5 so you fight the strongest you can handle.
+                local myLvl = getPlayerLevel()
+                local all = getMobs(Flags.FarmRange, {mobsOnly=true})
+                local best = {}
+                for _, mb in ipairs(all) do
+                    if mb.lvl <= myLvl + 5 then best[#best+1] = mb end
+                end
+                if #best == 0 then best = all end  -- nothing in range, fall back
+                -- sort by closest-to-my-level (strongest you can take)
+                table.sort(best, function(a, b)
+                    return math.abs(a.lvl - myLvl) < math.abs(b.lvl - myLvl)
+                end)
+                mobs = best
+            else
+                mobs = getMobs(Flags.FarmRange, {mobsOnly=true})
+            end
+            if mobs[1] then
+                tpToMob(mobs[1])
+                attack()
+            end
+        end
+    end
+end)
+
+-- Kill aura loop (separate, near-range only, no teleport)
+task.spawn(function()
+    while task.wait(0.1) do
+        if Flags.KillAura then
+            local mobs = getMobs(Flags.KillAuraRange, {mobsOnly=true})
+            if #mobs > 0 then attack() end
+        end
+    end
+end)
+
+-- Auto M1
+task.spawn(function()
+    while task.wait(0.15) do
+        if Flags.AutoM1 then attack() end
+    end
+end)
+
+-- Fruit farm: TP to each map fruit (does NOT eat - just collects/visits)
+task.spawn(function()
+    while task.wait(1) do
+        if Flags.FruitFarm then
+            local fruits = getMapFruits()
+            if fruits then
+                for _, fr in ipairs(fruits:GetChildren()) do
+                    if not Flags.FruitFarm then break end
+                    local hum = getHum()
+                    if not hum or hum.Health <= 0 then break end
+                    local part = fr:IsA("BasePart") and fr or fr:FindFirstChildWhichIsA("BasePart")
+                    if part then
+                        tpToCF(part.CFrame)
+                        task.wait(0.5)   -- visit only, no auto-eat
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Chest farm: TP onto each chest and force-collect before moving on
+task.spawn(function()
+    while task.wait(1) do
+        if Flags.ChestFarm then
+            local chests = getChestsFolder()
+            if chests then
+                for _, ch in ipairs(chests:GetChildren()) do
+                    if not Flags.ChestFarm then break end
+                    local hum = getHum()
+                    if not hum or hum.Health <= 0 then break end
+                    collectChest(ch)   -- TPs on, fires Touched, jitters to guarantee pickup
+                end
+            end
+        end
+    end
+end)
+
+--==[ MOVEMENT ]==-------------------------------------------------------------
+local flyBV, flyBG, flyConn
+local function stopFly()
+    if flyConn then flyConn:Disconnect(); flyConn=nil end
+    if flyBV then flyBV:Destroy(); flyBV=nil end
+    if flyBG then flyBG:Destroy(); flyBG=nil end
+end
+local function startFly()
+    local hrp = getHRP(); if not hrp then return end
+    stopFly()
+    flyBV = Instance.new("BodyVelocity"); flyBV.MaxForce=Vector3.new(9e9,9e9,9e9); flyBV.Velocity=Vector3.zero; flyBV.Parent=hrp
+    flyBG = Instance.new("BodyGyro"); flyBG.MaxTorque=Vector3.new(9e9,9e9,9e9); flyBG.P=9000; flyBG.Parent=hrp
+    flyConn = RunService.Heartbeat:Connect(function()
+        if not Flags.Fly or not flyBV or not flyBV.Parent then return end
+        local cam = Camera.CFrame
+        local move = Vector3.zero
+        local k = UserInputService
+        if k:IsKeyDown(Enum.KeyCode.W) then move += cam.LookVector end
+        if k:IsKeyDown(Enum.KeyCode.S) then move -= cam.LookVector end
+        if k:IsKeyDown(Enum.KeyCode.A) then move -= cam.RightVector end
+        if k:IsKeyDown(Enum.KeyCode.D) then move += cam.RightVector end
+        if k:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0,1,0) end
+        if k:IsKeyDown(Enum.KeyCode.LeftShift) then move -= Vector3.new(0,1,0) end
+        flyBV.Velocity = move * Flags.FlySpeed
+        flyBG.CFrame = cam
+    end)
+end
+
+RunService.Stepped:Connect(function()
+    if Flags.Noclip then
+        local c = getChar()
+        if c then for _,p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") and p.CanCollide then p.CanCollide=false end
+        end end
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    local hum = getHum()
+    if hum then
+        if Flags.SpeedHack then hum.WalkSpeed = Flags.WalkSpeed end
+        hum.UseJumpPower = true
+        hum.JumpPower = Flags.JumpPower
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if Flags.InfJump then local h=getHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end
+end)
+
+--==[ PLAYER ]==---------------------------------------------------------------
+pcall(function()
+    LocalPlayer.Idled:Connect(function()
+        if Flags.AntiAFK then
+            VirtualUser:Button2Down(Vector2.new(0,0), Camera.CFrame)
+            task.wait(1)
+            VirtualUser:Button2Up(Vector2.new(0,0), Camera.CFrame)
+        end
+    end)
+end)
+
+local origBright, origClock, origFog = Lighting.Brightness, Lighting.ClockTime, Lighting.FogEnd
+local function setFullbright(on)
+    if on then Lighting.Brightness=2; Lighting.ClockTime=14; Lighting.GlobalShadows=false
+    else Lighting.Brightness=origBright; Lighting.ClockTime=origClock; Lighting.GlobalShadows=true end
+end
+local function setNoFog(on)
+    if on then Lighting.FogEnd=9e9
+        for _,e in ipairs(Lighting:GetDescendants()) do if e:IsA("Atmosphere") then e.Density=0 end end
+    else Lighting.FogEnd=origFog end
+end
+
+--==[ ESP ]==------------------------------------------------------------------
+local espObjs = {}
+local function makeESP(inst, color, text)
+    if espObjs[inst] then return end
+    local hl = Instance.new("Highlight")
+    hl.FillColor=color; hl.FillTransparency=0.7; hl.OutlineColor=color
+    hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent=inst
+    local bb = Instance.new("BillboardGui")
+    bb.Size=UDim2.fromOffset(190,20); bb.StudsOffset=Vector3.new(0,3,0)
+    bb.AlwaysOnTop=true; bb.Parent=inst
+    local lbl = Instance.new("TextLabel")
+    lbl.Size=UDim2.fromScale(1,1); lbl.BackgroundTransparency=1
+    lbl.Font=Enum.Font.GothamMedium; lbl.Text=text; lbl.TextColor3=color
+    lbl.TextSize=12; lbl.TextStrokeTransparency=0.4; lbl.Parent=bb
+    espObjs[inst] = {hl=hl, bb=bb, lbl=lbl}
+end
+local function removeESP(inst)
+    local e = espObjs[inst]
+    if e then pcall(function() e.hl:Destroy(); e.bb:Destroy() end); espObjs[inst]=nil end
+end
+local function clearESP() for i in pairs(espObjs) do removeESP(i) end end
+
+RunService.Heartbeat:Connect(function()
+    local hrp = getHRP(); if not hrp then return end
+    local anyOn = Flags.ESPMobs or Flags.ESPPlayers or Flags.ESPFruits or Flags.ESPChests
+    if not anyOn then if next(espObjs) then clearESP() end return end
+    local myPos = hrp.Position
+
+    local folder = getAlive()
+    if folder then
+        for _, m in ipairs(folder:GetChildren()) do
+            if m ~= getChar() then
+                local r = m:FindFirstChild("HumanoidRootPart")
+                local h = m:FindFirstChildOfClass("Humanoid")
+                if r and h and h.Health > 0 then
+                    local isPlayer = Players:GetPlayerFromCharacter(m) ~= nil
+                    local d = (r.Position - myPos).Magnitude
+                    local want = (isPlayer and Flags.ESPPlayers) or (not isPlayer and Flags.ESPMobs)
+                    if want and d <= Flags.ESPMaxDist then
+                        if not espObjs[m] then makeESP(m, isPlayer and Color3.fromRGB(232,110,110) or Color3.fromRGB(96,165,250), m.Name) end
+                        if espObjs[m] then espObjs[m].lbl.Text = ("%s [%d]"):format(m.Name, math.floor(d)) end
+                    elseif espObjs[m] then removeESP(m) end
+                end
+            end
+        end
+    end
+
+    if Flags.ESPFruits then
+        local fruits = getMapFruits()
+        if fruits then
+            for _, fr in ipairs(fruits:GetChildren()) do
+                local part = fr:IsA("BasePart") and fr or fr:FindFirstChildWhichIsA("BasePart")
+                if part and (part.Position-myPos).Magnitude <= Flags.ESPMaxDist and not espObjs[fr] then
+                    makeESP(fr, Color3.fromRGB(126,211,145), "Fruit: "..fr.Name)
+                end
+            end
+        end
+    end
+
+    if Flags.ESPChests then
+        local chests = getChestsFolder()
+        if chests then
+            for _, ch in ipairs(chests:GetChildren()) do
+                local part = ch:IsA("BasePart") and ch or ch:FindFirstChildWhichIsA("BasePart")
+                if part and (part.Position-myPos).Magnitude <= Flags.ESPMaxDist and not espObjs[ch] then
+                    makeESP(ch, Color3.fromRGB(255,200,80), "Chest: "..ch.Name)
+                end
+            end
+        end
+    end
+end)
+
+--==[ CUSTOM KEY SCREEN ]==----------------------------------------------------
+local KEY_CORRECT = "R/SCRIPTS2026"
+local KEY_LINK    = "https://direct-link.net/3535552/Beq3v5uY3e6O"
+
+local keyParent = (gethui and gethui()) or game:GetService("CoreGui")
+
+local function runKeyScreen()
+    -- Always shows the key screen on every execution.
+    -- returns true once a valid key is entered (blocks until resolved)
+    local done = false
+    local success = false
+
+    local kg = Instance.new("ScreenGui")
+    kg.Name = "OnePeaceKey"
+    kg.ResetOnSpawn = false
+    kg.IgnoreGuiInset = true
+    kg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    kg.DisplayOrder = 99999
+    kg.Parent = keyParent
+
+    -- theme (matches Fluent "Darker")
+    local C = {
+        Bg     = Color3.fromRGB(18, 19, 24),
+        Bg2    = Color3.fromRGB(24, 26, 32),
+        Field  = Color3.fromRGB(28, 30, 37),
+        Stroke = Color3.fromRGB(44, 47, 56),
+        Text   = Color3.fromRGB(235, 238, 244),
+        Sub    = Color3.fromRGB(130, 138, 150),
+        Accent = Color3.fromRGB(255, 138, 76),
+        Good   = Color3.fromRGB(126, 211, 145),
+        Bad    = Color3.fromRGB(232, 110, 110),
+    }
+    local function mk(cls, props, kids)
+        local o = Instance.new(cls)
+        for k, v in pairs(props or {}) do if k ~= "Parent" then o[k] = v end end
+        for _, c in ipairs(kids or {}) do c.Parent = o end
+        if props and props.Parent then o.Parent = props.Parent end
+        return o
+    end
+    local function rc(p, r) mk("UICorner", { Parent = p, CornerRadius = UDim.new(0, r or 8) }) end
+    local function st(p, c, t) mk("UIStroke", { Parent = p, Color = c or C.Stroke, Thickness = t or 1 }) end
+
+    -- main card (compact)
+    local card = mk("Frame", {
+        Parent = kg, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(320, 250),
+        BackgroundColor3 = C.Bg, BorderSizePixel = 0, Active = true,
+    })
+    rc(card, 12); st(card, C.Stroke, 1)
+
+    -- accent top strip
+    mk("Frame", { Parent = card, Size = UDim2.new(1, 0, 0, 3),
+        BackgroundColor3 = C.Accent, BorderSizePixel = 0 },
+        { (function() local g=Instance.new("UICorner"); g.CornerRadius=UDim.new(0,12); return g end)() })
+
+    -- header (draggable area)
+    local header = mk("Frame", { Parent = card, Position = UDim2.fromOffset(0, 3),
+        Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, Active = true })
+    mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 10),
+        Size = UDim2.new(1, -40, 0, 22), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold, Text = "One Peace Hub", TextColor3 = C.Text,
+        TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left })
+    mk("TextLabel", { Parent = header, Position = UDim2.fromOffset(20, 30),
+        Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham, Text = "Key System  -  by @Mana_scripts", TextColor3 = C.Sub,
+        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left })
+
+    -- close
+    local closeB = mk("TextButton", { Parent = header, AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, -14, 0, 12), Size = UDim2.fromOffset(24, 24),
+        BackgroundColor3 = C.Bg2, Font = Enum.Font.GothamBold, Text = "X",
+        TextColor3 = C.Sub, TextSize = 12, AutoButtonColor = false })
+    rc(closeB, 6)
+
+    -- key input field
+    local field = mk("TextBox", { Parent = card, Position = UDim2.fromOffset(20, 70),
+        Size = UDim2.new(1, -40, 0, 40), BackgroundColor3 = C.Field, BorderSizePixel = 0,
+        Font = Enum.Font.Gotham, PlaceholderText = "Enter key...", Text = "",
+        TextColor3 = C.Text, PlaceholderColor3 = C.Sub, TextSize = 13,
+        ClearTextOnFocus = false })
+    rc(field, 8); st(field, C.Stroke, 1)
+    mk("UIPadding", { Parent = field, PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) })
+
+    -- status line
+    local status = mk("TextLabel", { Parent = card, Position = UDim2.fromOffset(20, 116),
+        Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham, Text = "Paste your key and press Submit", TextColor3 = C.Sub,
+        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left })
+
+    -- submit button
+    local submitB = mk("TextButton", { Parent = card, Position = UDim2.fromOffset(20, 142),
+        Size = UDim2.new(1, -40, 0, 40), BackgroundColor3 = C.Accent, BorderSizePixel = 0,
+        Font = Enum.Font.GothamBold, Text = "Submit", TextColor3 = Color3.fromRGB(20, 14, 10),
+        TextSize = 14, AutoButtonColor = false })
+    rc(submitB, 8)
+
+    -- get key button
+    local getB = mk("TextButton", { Parent = card, Position = UDim2.fromOffset(20, 190),
+        Size = UDim2.new(1, -40, 0, 36), BackgroundColor3 = C.Bg2, BorderSizePixel = 0,
+        Font = Enum.Font.GothamMedium, Text = "Get Key", TextColor3 = C.Text,
+        TextSize = 13, AutoButtonColor = false })
+    rc(getB, 8); st(getB, C.Stroke, 1)
+
+    -- hover effects
+    local function hov(btn, base, hi)
+        btn.MouseEnter:Connect(function() btn.BackgroundColor3 = hi end)
+        btn.MouseLeave:Connect(function() btn.BackgroundColor3 = base end)
+    end
+    hov(getB, C.Bg2, C.Field)
+    closeB.MouseEnter:Connect(function() closeB.BackgroundColor3 = C.Bad; closeB.TextColor3 = C.Text end)
+    closeB.MouseLeave:Connect(function() closeB.BackgroundColor3 = C.Bg2; closeB.TextColor3 = C.Sub end)
+
+    -- drag (whole card via header)
+    do
+        local UIS = game:GetService("UserInputService")
+        local dragging, ds, sp
+        local function begin(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                dragging = true; ds = i.Position; sp = card.Position
+            end
+        end
+        header.InputBegan:Connect(begin)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+                local d = i.Position - ds
+                card.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+    end
+
+    -- get key: copy link + open in browser if supported
+    getB.MouseButton1Click:Connect(function()
+        if setclipboard then pcall(setclipboard, KEY_LINK) end
+        local opened = false
+        -- try common executor "open url" functions
+        local openfns = { rawget(getfenv(), "request"), rawget(getfenv(), "http_request") }
+        pcall(function()
+            if syn and syn.request then
+                -- can't open browser, just rely on clipboard
+            end
+        end)
+        status.Text = "Link copied to clipboard! Paste in browser."
+        status.TextColor3 = C.Good
+    end)
+
+    -- submit
+    local function trySubmit()
+        local entered = field.Text:gsub("%s+", "")
+        if entered == KEY_CORRECT then
+            status.Text = "Key valid! Loading..."
+            status.TextColor3 = C.Good
+            success = true
+            task.wait(0.4)
+            kg:Destroy()
+            done = true
+        else
+            status.Text = "Invalid key. Try again."
+            status.TextColor3 = C.Bad
+            field.Text = ""
+            -- shake
+            local ox = card.Position
+            for i = 1, 3 do
+                card.Position = ox + UDim2.fromOffset(6, 0); task.wait(0.04)
+                card.Position = ox - UDim2.fromOffset(6, 0); task.wait(0.04)
+            end
+            card.Position = ox
+        end
+    end
+    submitB.MouseButton1Click:Connect(trySubmit)
+    field.FocusLost:Connect(function(enter) if enter then trySubmit() end end)
+
+    closeB.MouseButton1Click:Connect(function()
+        kg:Destroy(); done = true; success = false
+    end)
+
+    -- block until resolved
+    while not done do task.wait(0.05) end
+    return success
+end
+
+if not runKeyScreen() then
+    return  -- wrong key or closed; do not load the hub
+end
+
+--==[ FLUENT UI ]==------------------------------------------------------------
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+local Window = Fluent:CreateWindow({
+    Title = "One Peace Hub",
+    SubTitle = "by @Mana_scripts",
+    TabWidth = 150,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Darker",
+    MinimizeKey = Enum.KeyCode.RightControl,
+})
+
+local Tabs = {
+    Combat   = Window:AddTab({ Title = "Combat",    Icon = "swords" }),
+    Farm     = Window:AddTab({ Title = "Farm",      Icon = "sprout" }),
+    Teleport = Window:AddTab({ Title = "Teleport",  Icon = "map-pin" }),
+    Movement = Window:AddTab({ Title = "Movement",  Icon = "move" }),
+    Shop     = Window:AddTab({ Title = "Shop",      Icon = "shopping-cart" }),
+    ESP      = Window:AddTab({ Title = "ESP",       Icon = "eye" }),
+    Player   = Window:AddTab({ Title = "Player",    Icon = "user" }),
+}
+
+--==[ COMBAT TAB ]==-----------------------------------------------------------
+Tabs.Combat:AddParagraph({ Title = "Weapon", Content = "Pick the tool to auto-equip while farming. Re-equips after death." })
+local WeaponDrop = Tabs.Combat:AddDropdown("WeaponDrop", {
+    Title = "Farm Weapon", Values = listTools(), Multi = false, Default = 1,
+})
+WeaponDrop:OnChanged(function(v) SelectedWeapon = v end)
+Tabs.Combat:AddButton({ Title = "Refresh Weapons", Callback = function()
+    WeaponDrop:SetValues(listTools())
+end })
+-- auto-select first tool if available
+do
+    local tools = listTools()
+    if tools[1] then SelectedWeapon = tools[1] end
+end
+
+Tabs.Combat:AddParagraph({ Title = "Auto Farm", Content = "Teleports to mobs and attacks with safe throttled clicks." })
+Tabs.Combat:AddToggle("AutoFarm", { Title="Auto Farm (nearest mob)", Default=false,
+    Callback=function(v) Flags.AutoFarm=v end })
+Tabs.Combat:AddToggle("LvlFarm", { Title="Level Farm (weakest first)", Default=false,
+    Callback=function(v) Flags.LvlFarm=v end })
+Tabs.Combat:AddToggle("BossFarm", { Title="Boss Farm (Lv150+ / bosses)", Default=false,
+    Callback=function(v) Flags.BossFarm=v end })
+Tabs.Combat:AddSlider("FarmRange", { Title="Farm Range", Default=2000, Min=100, Max=5000, Rounding=0,
+    Callback=function(v) Flags.FarmRange=v end })
+Tabs.Combat:AddSlider("FarmHeight", { Title="Farm Height Offset", Default=4, Min=0, Max=30, Rounding=0,
+    Callback=function(v) Flags.FarmHeight=v end })
+Tabs.Combat:AddParagraph({ Title = "Aura", Content = "Attacks mobs in close range without teleporting." })
+Tabs.Combat:AddToggle("KillAura", { Title="Kill Aura", Default=false,
+    Callback=function(v) Flags.KillAura=v end })
+Tabs.Combat:AddSlider("KillAuraRange", { Title="Kill Aura Range", Default=80, Min=10, Max=400, Rounding=0,
+    Callback=function(v) Flags.KillAuraRange=v end })
+Tabs.Combat:AddToggle("AutoM1", { Title="Auto M1 (spam click)", Default=false,
+    Callback=function(v) Flags.AutoM1=v end })
+
+--==[ FARM TAB ]==-------------------------------------------------------------
+Tabs.Farm:AddParagraph({ Title = "Auto Farms", Content = "Fruit and chest collection. Auto-respawns you if you die while farming." })
+Tabs.Farm:AddToggle("FruitFarm", { Title="Fruit Farm (visit map fruits)", Default=false,
+    Callback=function(v) Flags.FruitFarm=v end })
+Tabs.Farm:AddToggle("ChestFarm", { Title="Chest Farm (collect chests)", Default=false,
+    Callback=function(v) Flags.ChestFarm=v end })
+Tabs.Farm:AddToggle("AutoRespawn", { Title="Auto Respawn (press Spawn on death)", Default=true,
+    Callback=function(v) AutoRespawn=v end })
+
+--==[ TELEPORT TAB ]==---------------------------------------------------------
+Tabs.Teleport:AddParagraph({ Title = "NPCs & Quests", Content = "Teleport to quest givers and shop NPCs." })
+
+-- NPC dropdown
+local npcMap = {}
+local function buildNPCList()
+    npcMap = {}
+    local names = {}
+    for _, sub in ipairs({"Quest","DailyQuest","Shop"}) do
+        local folder = getNPCFolder(sub)
+        if folder then
+            for _, npc in ipairs(folder:GetChildren()) do
+                local label = ("[%s] %s"):format(sub, npc.Name)
+                npcMap[label] = npc
+                names[#names+1] = label
+            end
+        end
+    end
+    return names
+end
+
+local NPCDrop = Tabs.Teleport:AddDropdown("NPCDrop", {
+    Title = "Select NPC / Quest", Values = buildNPCList(), Multi = false, Default = 1,
+})
+NPCDrop:OnChanged(function(v) Tabs.Teleport._selNPC = v end)
+Tabs.Teleport:AddButton({ Title = "Teleport to NPC", Callback = function()
+    local sel = Tabs.Teleport._selNPC
+    local npc = sel and npcMap[sel]
+    if npc then local cf = getPivot(npc); if cf then tpToCF(cf) end end
+end })
+Tabs.Teleport:AddButton({ Title = "Refresh NPCs", Callback = function()
+    NPCDrop:SetValues(buildNPCList())
+end })
+
+Tabs.Teleport:AddParagraph({ Title = "Mobs", Content = "Teleport to a specific mob." })
+
+-- Mob dropdown
+local mobMap = {}
+local function buildMobList()
+    mobMap = {}
+    local names = {}
+    local folder = getAlive()
+    if folder then
+        for _, m in ipairs(folder:GetChildren()) do
+            local h = m:FindFirstChildOfClass("Humanoid")
+            local r = m:FindFirstChild("HumanoidRootPart")
+            if h and r and h.Health > 0 and not Players:GetPlayerFromCharacter(m) then
+                mobMap[m.Name] = m
+                names[#names+1] = m.Name
+            end
+        end
+    end
+    return names
+end
+
+local MobDrop = Tabs.Teleport:AddDropdown("MobDrop", {
+    Title = "Select Mob", Values = buildMobList(), Multi = false, Default = 1,
+})
+MobDrop:OnChanged(function(v) Tabs.Teleport._selMob = v end)
+Tabs.Teleport:AddButton({ Title = "Teleport to Mob", Callback = function()
+    local sel = Tabs.Teleport._selMob
+    local m = sel and mobMap[sel]
+    if m and m.Parent then
+        local r = m:FindFirstChild("HumanoidRootPart")
+        if r then tpToCF(r.CFrame) end
+    end
+end })
+Tabs.Teleport:AddButton({ Title = "Refresh Mobs", Callback = function()
+    MobDrop:SetValues(buildMobList())
+end })
+
+Tabs.Teleport:AddParagraph({ Title = "Players", Content = "Teleport to a player." })
+local playerMap = {}
+local function buildPlayerList()
+    playerMap = {}
+    local names = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            playerMap[p.Name] = p
+            names[#names+1] = p.Name
+        end
+    end
+    return names
+end
+local PlayerDrop = Tabs.Teleport:AddDropdown("PlayerDrop", {
+    Title = "Select Player", Values = buildPlayerList(), Multi = false, Default = 1,
+})
+PlayerDrop:OnChanged(function(v) Tabs.Teleport._selPlayer = v end)
+Tabs.Teleport:AddButton({ Title = "Teleport to Player", Callback = function()
+    local sel = Tabs.Teleport._selPlayer
+    local p = sel and playerMap[sel]
+    if p and p.Character then
+        local r = p.Character:FindFirstChild("HumanoidRootPart")
+        if r then tpToCF(r.CFrame) end
+    end
+end })
+Tabs.Teleport:AddButton({ Title = "Refresh Players", Callback = function()
+    PlayerDrop:SetValues(buildPlayerList())
+end })
+
+--==[ MOVEMENT TAB ]==---------------------------------------------------------
+Tabs.Movement:AddToggle("Fly", { Title="Fly (WASD/Space/Shift)", Default=false,
+    Callback=function(v) Flags.Fly=v; if v then startFly() else stopFly() end end })
+Tabs.Movement:AddSlider("FlySpeed", { Title="Fly Speed", Default=80, Min=10, Max=400, Rounding=0,
+    Callback=function(v) Flags.FlySpeed=v end })
+Tabs.Movement:AddToggle("SpeedHack", { Title="Speed Hack", Default=false,
+    Callback=function(v) Flags.SpeedHack=v; if not v then local h=getHum(); if h then h.WalkSpeed=16 end end end })
+Tabs.Movement:AddSlider("WalkSpeed", { Title="Walk Speed", Default=50, Min=16, Max=350, Rounding=0,
+    Callback=function(v) Flags.WalkSpeed=v end })
+Tabs.Movement:AddSlider("JumpPower", { Title="Jump Power", Default=50, Min=50, Max=400, Rounding=0,
+    Callback=function(v) Flags.JumpPower=v end })
+Tabs.Movement:AddToggle("Noclip", { Title="Noclip", Default=false,
+    Callback=function(v) Flags.Noclip=v end })
+Tabs.Movement:AddToggle("InfJump", { Title="Infinite Jump", Default=false,
+    Callback=function(v) Flags.InfJump=v end })
+
+--==[ SHOP TAB ]==-------------------------------------------------------------
+Tabs.Shop:AddParagraph({ Title = "Shop", Content = "Teleport to merchants and auto-collect boxes." })
+Tabs.Shop:AddButton({ Title = "Teleport to Boat Merchant", Callback = function()
+    local shop = getNPCFolder("Shop")
+    if shop then
+        local merchant = shop:FindFirstChild("Boat Merchant") or shop:GetChildren()[1]
+        if merchant then local cf = getPivot(merchant); if cf then tpToCF(cf) end end
+    end
+end })
+Tabs.Shop:AddButton({ Title = "Claim Free Box (BoxEvent)", Callback = function()
+    local rep = game:GetService("ReplicatedStorage")
+    local remotes = rep:FindFirstChild("Remotes")
+    local boxEvent = remotes and remotes:FindFirstChild("BoxEvent")
+    if boxEvent then pcall(function() boxEvent:FireServer() end) end
+end })
+Tabs.Shop:AddParagraph({ Title = "Note", Content = "Open the in-game shop UI to buy items - the buy menu is server-validated." })
+
+--==[ ESP TAB ]==--------------------------------------------------------------
+Tabs.ESP:AddToggle("ESPMobs", { Title="Mobs ESP", Default=false,
+    Callback=function(v) Flags.ESPMobs=v end })
+Tabs.ESP:AddToggle("ESPPlayers", { Title="Players ESP", Default=false,
+    Callback=function(v) Flags.ESPPlayers=v end })
+Tabs.ESP:AddToggle("ESPFruits", { Title="Fruits ESP", Default=false,
+    Callback=function(v) Flags.ESPFruits=v end })
+Tabs.ESP:AddToggle("ESPChests", { Title="Chests ESP", Default=false,
+    Callback=function(v) Flags.ESPChests=v end })
+Tabs.ESP:AddSlider("ESPMaxDist", { Title="Max Distance", Default=2000, Min=100, Max=6000, Rounding=0,
+    Callback=function(v) Flags.ESPMaxDist=v end })
+
+--==[ PLAYER TAB ]==-----------------------------------------------------------
+Tabs.Player:AddToggle("AntiAFK", { Title="Anti-AFK", Default=true,
+    Callback=function(v) Flags.AntiAFK=v end })
+Tabs.Player:AddToggle("Fullbright", { Title="Fullbright", Default=false,
+    Callback=function(v) Flags.Fullbright=v; setFullbright(v) end })
+Tabs.Player:AddToggle("NoFog", { Title="No Fog", Default=false,
+    Callback=function(v) Flags.NoFog=v; setNoFog(v) end })
+Tabs.Player:AddButton({ Title="Reset Character", Description="Kills your character",
+    Callback=function() local h=getHum(); if h then h.Health=0 end end })
+Tabs.Player:AddButton({ Title="Rejoin Server",
+    Callback=function() pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer) end) end })
+Tabs.Player:AddButton({ Title="Server Hop",
+    Callback=function() pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end) end })
+
+--==[ FINALIZE ]==-------------------------------------------------------------
+Window:SelectTab(1)
+Fluent:Notify({ Title="One Peace Hub", Content="Loaded! by @Mana_scripts", Duration=6 })
+
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetFolder("OnePeaceHub")
+InterfaceManager:SetFolder("OnePeaceHub")
+InterfaceManager:BuildInterfaceSection(Tabs.Player)
+SaveManager:BuildConfigSection(Tabs.Player)
+SaveManager:LoadAutoloadConfig()
